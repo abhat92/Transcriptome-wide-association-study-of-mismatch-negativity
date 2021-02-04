@@ -1,0 +1,71 @@
+#$ -l h_vmem=7.5G
+#$ -l tmem=7.5G
+#$ -l h_rt=03:00:00
+#$ -t 1
+#$ -j y
+#$ -cwd
+#$ -S /bin/bash
+
+### Script to convert imputed vcf data into stricly biallelic plink format
+#### Commands for this are fully stolen from: http://apol1.blogspot.co.uk/2014/11/best-practice-for-converting-vcf-files.html
+filepath=/SAN/neuroscience/PEIC/projects/EEG_genetics_consortium/genetic_data/Mei/imputed_data # 1) Filepath to imputed data
+filepath_1=/SAN/neuroscience/PEIC/projects/EEG_genetics_consortium/genetic_data/Mei/imputed_data # 2) filepath to snpinfo file
+qcfam=/SAN/neuroscience/PEIC/projects/EEG_genetics_consortium/genetic_data/Mei/mclean_fhg19.QCed.fam # 2) QCed family file
+plink2=/cluster/project9/PE/programs/plink_1.9/plink
+i=$SGE_TASK_ID
+
+if [ -e $filepath_1/info/$i.snpinfo ]
+then
+
+    ### Exclude all SNPs with INFO < info_thr and update SNP names where possible and update gender and phenotypes
+    ## If not present create these once!
+    awk '{print 0,$2,$5}' $qcfam > $filepath/temp_sex_update.txt
+    awk '{print 0,$2,$6}' $qcfam > $filepath/temp_pheno_update.txt
+
+    # Produce second time with vcf to allow vcf-min-gp filtering o f0.9
+     /cluster/project9/PE/programs/plink_1.9/plink --vcf $filepath/$i.vcf.gz \
+    	--keep-allele-order \
+    	--vcf-idspace-to _ \
+	--vcf-min-gp 0.8 \
+    	--biallelic-only strict \
+    	--const-fid \
+    	--allow-extra-chr 0 \
+    	--split-x b37 no-fail \
+    	--make-bed \
+    	--out $filepath/temp_$i
+
+    ## Update RS numbers, 2 arguments: 1) name of bim file 2) chromosome number
+    Rscript /cluster/project9/PE/programs/pe_toolkit/scripts/update_snps_fromInfo.R $filepath temp_$i.bim $i
+    mv $filepath/temp_$i.bim.new $filepath/temp_$i.bim
+
+    ## Update files
+    awk '$3>=0.8 {print $filepath}' $filepath_1/info/$i.snpinfo > $filepath/temp_info_pass$i.txt # Filter on info scores - filter files
+    awk '$3>=0.8 {print $filepath,$2}' $filepath_1/info/$i.snpinfo | awk '$2!="."' > $filepath/temp_info_pass_snpName$i.txt # List RS numbers where available for SNPs passing infor score threshold
+    /cluster/project9/PE/programs/plink_1.9/plink --bfile $filepath/temp_$i --extract $filepath/temp_info_pass$i.txt --make-bed --out $filepath/temp2_$i
+    /cluster/project9/PE/programs/plink_1.9/plink --bfile $filepath/temp2_$i --allow-no-sex  --update-name $filepath/temp_info_pass_snpName$i.txt --make-bed --out $filepath_1/imputed_plink/$i
+
+    echo "--------------------------------------------"
+    echo "Plink binary files have been writen to the input folder"
+    echo -e "\nEnd of script\n"
+
+# else
+    echo -e "\n$filepath/info/$i.snpinfo does not exist"
+     echo -e "\n\nPlease generate SNP info before running VCF to Plink - info is needed to determine which SNPs are to be included in plink set!\n\n"
+ fi
+
+    ## Converte imputed vcf files to plink binary files
+	# ####### THIS BLOCK IS NOT IN USE ANY MORE AS IT DOES NOT ALLOW FOR GENOTYPE PROBABILITY FILTERING - NAMING is now done with R script 
+	## Produce file first with bcftools to get correct file names
+    	# bcftools norm -Ou -m -any $filepath/$i.vcf.gz |
+    	# bcftools norm -Ou -f /home/molpsych/data/GRCh37_reference/human_g1k_v37.fasta |
+    	# bcftools annotate -Ob -x ID \
+    	#     -I +'%CHROM:%POS:%REF:%ALT' | \
+    	# plink2 --bcf /dev/stdin \
+    	#     --keep-allele-order \
+    	#     --vcf-idspace-to _ \
+    	#     --biallelic-only strict \
+    	#     --const-fid \
+    	#     --allow-extra-chr 0 \
+    	#     --split-x b37 no-fail \
+    	#     --make-bed \
+   	#     --out $filepath/temp_names$
